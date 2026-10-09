@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Shield, Lock, Mail, User, LogIn, UserPlus, AlertCircle, MapPin, Navigation, Compass } from 'lucide-react';
 import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, getIdTokenResult, User as FirebaseUser } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
@@ -26,8 +26,45 @@ interface DashboardAuthScreenProps {
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
+type GpsStatus = 'acquiring' | 'locked' | 'denied' | 'unavailable' | 'timeout' | 'unsupported' | 'insecure';
+
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function getGeolocationError(error: GeolocationPositionError): { status: GpsStatus; message: string } {
+  const browserDetail = error.message ? ` Browser detail: ${error.message}` : '';
+
+  if (!window.isSecureContext) {
+    return {
+      status: 'insecure',
+      message: 'Location access requires a secure origin (HTTPS or localhost). Open the Dashboard using a secure connection.'
+    };
+  }
+
+  if (error.code === error.PERMISSION_DENIED) {
+    return {
+      status: 'denied',
+      message: `The browser denied location access. Check this site’s location permission and any device or browser policy.${browserDetail}`
+    };
+  }
+  if (error.code === error.POSITION_UNAVAILABLE) {
+    return {
+      status: 'unavailable',
+      message: `The device could not determine a location. Check device location services and try again.${browserDetail}`
+    };
+  }
+  if (error.code === error.TIMEOUT) {
+    return {
+      status: 'timeout',
+      message: `The location request timed out before a fix was available. Try again when location services are ready.${browserDetail}`
+    };
+  }
+
+  return {
+    status: 'unavailable',
+    message: `The browser could not provide a location (error code ${error.code}).${browserDetail}`
+  };
 }
 
 function isValidGpsLocation(location: { lat: number; lng: number }): boolean {
@@ -87,14 +124,21 @@ export const DashboardAuthScreen: React.FC<DashboardAuthScreenProps> = ({ onLogi
 
   // Live GPS Acquisition State
   const [gpsLocation, setGpsLocation] = useState<{ lat: number; lng: number; accuracy?: number; timestamp?: number } | null>(null);
-  const [gpsStatus, setGpsStatus] = useState<'acquiring' | 'locked' | 'denied' | 'unsupported'>('acquiring');
+  const [gpsStatus, setGpsStatus] = useState<GpsStatus>('acquiring');
   const [gpsErrorMsg, setGpsErrorMsg] = useState<string | null>(null);
+  const hasGpsFixRef = useRef(false);
 
   // Request high-accuracy GPS coordinates immediately on component mount
   useEffect(() => {
+    if (!window.isSecureContext) {
+      setGpsStatus('insecure');
+      setGpsErrorMsg('Location access requires a secure origin (HTTPS or localhost). Open the Dashboard using a secure connection.');
+      return;
+    }
+
     if (!navigator.geolocation) {
       setGpsStatus('unsupported');
-      setGpsErrorMsg('Browser does not support Geolocation. Real-time GPS is required for C2 access.');
+      setGpsErrorMsg('The Geolocation API is unavailable in this browser or browsing context. Real-time location is required for C2 access.');
       return;
     }
 
@@ -114,18 +158,17 @@ export const DashboardAuthScreen: React.FC<DashboardAuthScreenProps> = ({ onLogi
           setGpsErrorMsg('The browser returned an invalid GPS location. Waiting for a valid fix.');
           return;
         }
+        hasGpsFixRef.current = true;
         setGpsLocation(location);
         setGpsStatus('locked');
         setGpsErrorMsg(null);
       },
       (err) => {
-        console.warn('Geolocation acquisition status:', err.message);
-        if (err.code === err.PERMISSION_DENIED) {
-          setGpsStatus('denied');
-          setGpsErrorMsg('Location access is required to authenticate into the C2 Dashboard. Please enable GPS/Location in your browser.');
-        } else {
-          // If timeout occurred, keep attempting
-          setGpsStatus('acquiring');
+        const failure = getGeolocationError(err);
+        console.warn('Geolocation acquisition failed:', { code: err.code, message: err.message });
+        if (!hasGpsFixRef.current) {
+          setGpsStatus(failure.status);
+          setGpsErrorMsg(failure.message);
         }
       },
       { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
@@ -138,13 +181,24 @@ export const DashboardAuthScreen: React.FC<DashboardAuthScreenProps> = ({ onLogi
 
   const requestGpsNow = (): Promise<{ lat: number; lng: number; accuracy?: number; timestamp?: number }> => {
     return new Promise((resolve, reject) => {
+      if (!window.isSecureContext) {
+        const message = 'Location access requires a secure origin (HTTPS or localhost). Open the Dashboard using a secure connection.';
+        setGpsStatus('insecure');
+        setGpsErrorMsg(message);
+        reject(new Error(message));
+        return;
+      }
+
       if (!navigator.geolocation) {
-        const message = 'This browser does not support GPS location.';
+        const message = 'The Geolocation API is unavailable in this browser or browsing context.';
         setGpsStatus('unsupported');
         setGpsErrorMsg(message);
         reject(new Error(message));
         return;
       }
+
+      setGpsStatus('acquiring');
+      setGpsErrorMsg(null);
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           const loc = {
@@ -161,20 +215,18 @@ export const DashboardAuthScreen: React.FC<DashboardAuthScreenProps> = ({ onLogi
             reject(new Error(message));
             return;
           }
+          hasGpsFixRef.current = true;
           setGpsLocation(loc);
           setGpsStatus('locked');
           setGpsErrorMsg(null);
           resolve(loc);
         },
         (error) => {
-          const message = error.code === error.PERMISSION_DENIED
-            ? 'Location permission was denied. Enable browser location access and retry.'
-            : error.code === error.TIMEOUT
-              ? 'GPS did not return a fix in time. Retry when location is available.'
-              : 'Unable to obtain a GPS location. Check device location settings and retry.';
-          setGpsStatus(error.code === error.PERMISSION_DENIED ? 'denied' : 'acquiring');
-          setGpsErrorMsg(message);
-          reject(new Error(message));
+          const failure = getGeolocationError(error);
+          console.warn('Geolocation request failed:', { code: error.code, message: error.message });
+          setGpsStatus(failure.status);
+          setGpsErrorMsg(failure.message);
+          reject(new Error(failure.message));
         },
         { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
       );
@@ -290,7 +342,7 @@ export const DashboardAuthScreen: React.FC<DashboardAuthScreenProps> = ({ onLogi
         <div className={`mb-5 p-3 rounded-2xl border text-xs transition-all ${
           gpsStatus === 'locked' && gpsLocation
             ? 'bg-[#30d158]/10 border-[#30d158]/20 text-[#30d158]'
-            : gpsStatus === 'denied'
+            : gpsStatus === 'denied' || gpsStatus === 'unavailable' || gpsStatus === 'timeout' || gpsStatus === 'unsupported' || gpsStatus === 'insecure'
             ? 'bg-[#ff453a]/15 border-[#ff453a]/30 text-[#ff453a]'
             : 'bg-[#2997ff]/10 border-[#2997ff]/20 text-[#2997ff]'
         }`}>
@@ -301,20 +353,30 @@ export const DashboardAuthScreen: React.FC<DashboardAuthScreenProps> = ({ onLogi
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#30d158] opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-[#30d158]"></span>
                 </span>
-              ) : (
+              ) : gpsStatus === 'acquiring' ? (
                 <Navigation className="w-3.5 h-3.5 text-[#2997ff] animate-spin" />
+              ) : (
+                <AlertCircle className="w-3.5 h-3.5" />
               )}
               <span className="font-semibold text-[11px]">
-                {gpsStatus === 'locked' ? 'GPS Telemetry Fixed' : 'GPS Verification Required'}
+                {gpsStatus === 'locked'
+                  ? 'GPS Telemetry Fixed'
+                  : gpsStatus === 'acquiring'
+                    ? 'GPS Verification Required'
+                    : gpsStatus === 'insecure'
+                      ? 'Secure Connection Required'
+                      : gpsStatus === 'unsupported'
+                        ? 'Location API Unavailable'
+                        : 'GPS Verification Required'}
               </span>
             </div>
-            {gpsStatus === 'denied' && (
+            {(gpsStatus === 'denied' || gpsStatus === 'unavailable' || gpsStatus === 'timeout') && (
               <button
                 type="button"
                 onClick={() => requestGpsNow().catch(console.error)}
                 className="text-[10px] bg-[#ff453a] text-white px-2.5 py-0.5 rounded-full font-medium"
               >
-                Grant Access
+                {gpsStatus === 'denied' ? 'Grant Access' : 'Retry Location'}
               </button>
             )}
           </div>

@@ -1,6 +1,5 @@
 {
   "hosting": {
-    "site": "siteon-47a8f",
     "public": "dashboard/dist",
     "ignore": [
       "firebase.json",

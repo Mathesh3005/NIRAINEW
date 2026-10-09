@@ -262,42 +262,11 @@ function broadcast(type, payload) {
   });
 }
 
-function objectToFirestoreFields(obj) {
-  const fields = {};
-  for (const [key, val] of Object.entries(obj)) {
-    if (val === null || val === undefined) continue;
-    if (typeof val === 'string') fields[key] = { stringValue: val };
-    else if (typeof val === 'number') fields[key] = Number.isInteger(val) ? { integerValue: val.toString() } : { doubleValue: val };
-    else if (typeof val === 'boolean') fields[key] = { booleanValue: val };
-    else if (typeof val === 'object' && !Array.isArray(val)) fields[key] = { mapValue: { fields: objectToFirestoreFields(val) } };
-  }
-  return fields;
-}
-
 function syncToFirebase(coll, id, data) {
-  try {
-    const apiKey = 'AIzaSyBKYowgbbyApg-jbjJUwXQh69DHtxKJUvU';
-    const projectId = 'siteon-47a8f';
-    const fields = objectToFirestoreFields(data);
-
-    fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${coll}/${id}?key=${apiKey}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fields })
-    }).then(res => {
-      if (res.status === 404) {
-        fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${coll}?key=${apiKey}&documentId=${id}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fields })
-        }).catch(() => {});
-      }
-    }).catch(() => {});
-
-    if (db) {
-      db.collection(coll).doc(id).set(data, { merge: true }).catch(() => {});
-    }
-  } catch (err) {}
+  if (!db) return;
+  db.collection(coll).doc(id).set(data, { merge: true }).catch(error => {
+    console.error(`[NIRAI Firebase Admin] Failed to sync ${coll}/${id}:`, error.message);
+  });
 }
 
 function logAudit(action, actor, target) {

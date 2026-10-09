@@ -1,10 +1,42 @@
-node_modules/
-.DS_Store
-dist/
-build/
+# Environment files
 .env
-.env.local
-*.log
-.gradle/
+.env.*
+!.env.example
+
+# Firebase Admin credentials
+firebase-secrets/
+*-firebase-adminsdk-*.json
+*service-account*.json
+firebase-service-account*.json
+firebase-admin*.json
+*-admin.json
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Firebase
+.firebase/
+firebase-secrets/
+*-firebase-adminsdk-*.json
+*service-account*.json
+firebase-service-account*.json
+firebase-admin*.json
+*-admin.json
+
+# Node dependencies
+node_modules/
+
+# Generated dashboard files
+dashboard/dist/
+
+# Android generated files
+android/.gradle/
+android/**/build/
+android/local.properties
+
+# IDE and logs
 .idea/
-*.apk
+.vscode/
+*.log

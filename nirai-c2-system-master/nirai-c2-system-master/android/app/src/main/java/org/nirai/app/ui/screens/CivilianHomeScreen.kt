@@ -244,12 +244,15 @@ fun CivilianHomeScreen() {
         }
     }
 
-    LaunchedEffect(isOnline, pendingCount) {
-        if (isOnline) {
+    LaunchedEffect(isOnline, pendingCount, isSubmitting, activeCaseId) {
+        if (isOnline && !isSubmitting && activeCaseId == null) {
             while (true) {
                 val queued = PendingSosStore.getPending(context)
                 if (queued.isEmpty()) break
                 queued.forEach { sos ->
+                    if (isSubmitting || activeCaseId != null || pendingCaseId != sos.caseId) {
+                        return@forEach
+                    }
                     try {
                         val confirmedId = NiraiApi.postSos(
                             caseId = sos.caseId,
@@ -262,7 +265,7 @@ fun CivilianHomeScreen() {
                             address = sos.address
                         )
                         PendingSosStore.remove(context, sos.caseId)
-                        if (pendingCaseId == sos.caseId || activeCaseId == null) {
+                        if (pendingCaseId == sos.caseId && activeCaseId == null && cancelledCaseId != sos.caseId) {
                             activeCaseId = confirmedId
                             cancelledCaseId = null
                             PendingSosStore.saveActiveCaseId(context, confirmedId)
@@ -270,6 +273,8 @@ fun CivilianHomeScreen() {
                             backendStatus = "raised"
                             deliveryMessage = "SOS accepted by the NIRAI backend."
                         }
+                    } catch (error: CancellationException) {
+                        throw error
                     } catch (_: Exception) {
                         // Keep the durable outbox entry; retry when connectivity is restored.
                     }
@@ -426,12 +431,19 @@ fun CivilianHomeScreen() {
         isCancelling = true
         scope.launch {
             try {
-                NiraiApi.cancelCase(caseId)
+                check(NiraiApi.cancelCase(caseId)) { "The backend did not confirm cancellation." }
                 backendStatus = "false_alarm"
                 cancelledCaseId = caseId
                 activeCaseId = null
                 PendingSosStore.clearActiveCaseId(context)
+                if (pendingCaseId == caseId) {
+                    PendingSosStore.remove(context, caseId)
+                    pendingCaseId = null
+                    pendingCount = PendingSosStore.getPending(context).size
+                }
                 deliveryMessage = "Cancellation confirmed."
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Exception) {
                 deliveryMessage = error.message ?: "Cancellation failed. The emergency remains active."
             } finally {

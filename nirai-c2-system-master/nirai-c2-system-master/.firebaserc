@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "siteon-47a8f"
-  }
+    "default": "siteon-47a8f",
+    "nirai": "nirai-c2"
+  },
+  "targets": {},
+  "etags": {}
 }
