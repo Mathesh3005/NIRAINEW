@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "test": "node --experimental-test-module-mocks --test",
     "set-dashboard-role": "node setDashboardRole.js"
   },
   "dependencies": {

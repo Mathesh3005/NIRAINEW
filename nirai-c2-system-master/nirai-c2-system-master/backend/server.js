@@ -374,37 +374,27 @@ app.post('/v1/sos', (req, res) => {
     reporterPhotoUrl
   } = req.body;
 
+  const targetId = reqCaseId || `case-${Date.now().toString().slice(-4)}`;
+  const existingCase = state.cases.find(c => c.id === targetId);
+  if (existingCase) {
+    return res.status(200).json({
+      success: true,
+      case: existingCase,
+      caseId: existingCase.id,
+      locationUnavailable: Boolean(existingCase.locationUnavailable)
+    });
+  }
+
   // --- STEP 1: Validate coordinates ---
   const coordResult = validateCoordinates(lat, lng);
   if (!coordResult.valid) {
-    // Return 400 only if this is a brand-new case with no existing location to fall back to
-    const existingCase = state.cases.find(c => c.id === reqCaseId);
-    if (!existingCase) {
-      console.warn(`[SOS] Rejected: ${coordResult.error} | body:`, JSON.stringify(req.body));
-      return res.status(400).json({
-        success: false,
-        error: `Invalid coordinates: ${coordResult.error}`,
-        locationUnavailable: true,
-        received: { lat, lng }
-      });
-    }
-    // Do not keep displaying an old location as the current SOS position.
-    const previousCase = snapshotCase(existingCase);
-    existingCase.location = null;
-    existingCase.locationUnavailable = true;
-    if (address) existingCase.address = address;
-    if (reporterPhotoUrl) existingCase.reporterPhotoUrl = reporterPhotoUrl;
-    try {
-      persistCases();
-    } catch (error) {
-      restoreCase(existingCase, previousCase);
-      console.error(`[SOS] Unable to persist case ${existingCase.id}:`, error);
-      return res.status(500).json({ success: false, error: 'Unable to save the SOS case.' });
-    }
-    logAudit('SOS_TRIGGERED', existingCase.reporterName, existingCase.id);
-    broadcast('CASE_CREATED', existingCase);
-    syncToFirebase('cases', existingCase.id, existingCase);
-    return res.status(201).json({ success: true, case: existingCase, caseId: existingCase.id, locationUnavailable: true });
+    console.warn(`[SOS] Rejected: ${coordResult.error} | body:`, JSON.stringify(req.body));
+    return res.status(400).json({
+      success: false,
+      error: `Invalid coordinates: ${coordResult.error}`,
+      locationUnavailable: true,
+      received: { lat, lng }
+    });
   }
 
   const validLat = coordResult.lat;
@@ -415,55 +405,39 @@ app.post('/v1/sos', (req, res) => {
   const locationAccuracy = accuracy !== null && accuracy !== undefined && accuracy !== '' && Number.isFinite(Number(accuracy)) && Number(accuracy) >= 0
     ? Number(accuracy)
     : null;
-  const targetId = reqCaseId || `case-${Date.now().toString().slice(-4)}`;
-
-  let newCase = state.cases.find(c => c.id === targetId);
-  const previousCase = newCase ? snapshotCase(newCase) : null;
-  if (!newCase) {
-    // --- STEP 2: Create new case with validated coordinates ---
-    newCase = {
-      id: targetId,
-      reporterUserId: 'usr-mobile',
-      reporterName: reporterName || 'Anonymous Citizen',
-      reporterPhone: reporterPhone || '+919876543210',
-      status: 'raised',
-      location: {
-        lat: validLat,
-        lng: validLng
-      },
-      locationAccuracy,
-      locationTimestamp,
-      locationUnavailable: false,
-      address: address || `GPS: ${validLat.toFixed(5)}, ${validLng.toFixed(5)}`,
-      severityScore: 5,
-      createdAt: new Date().toISOString(),
-      assignedOfficerUserId: null,
-      assignedOfficerName: null,
-      etaSeconds: null,
-      droneId: null,
-      verificationNotes: 'Pending operator verification call.',
-      mediaUrl: mediaUrl || null,
-      reporterPhotoUrl: reporterPhotoUrl || null,
-      cancelledBy: null
-    };
-    state.cases.unshift(newCase);
-    console.log(`[SOS] New case ${newCase.id} created at lat=${validLat}, lng=${validLng}`);
-  } else {
-    // --- STEP 3: Update existing case with fresh real coordinates ---
-    newCase.location = { lat: validLat, lng: validLng };
-    newCase.locationAccuracy = locationAccuracy;
-    newCase.locationTimestamp = locationTimestamp;
-    newCase.locationUnavailable = false;
-    if (address) newCase.address = address;
-    if (reporterPhotoUrl) newCase.reporterPhotoUrl = reporterPhotoUrl;
-    console.log(`[SOS] Existing case ${newCase.id} location updated to lat=${validLat}, lng=${validLng}`);
-  }
+  // --- STEP 2: Create new case with validated coordinates ---
+  const newCase = {
+    id: targetId,
+    reporterUserId: 'usr-mobile',
+    reporterName: reporterName || 'Anonymous Citizen',
+    reporterPhone: reporterPhone || '+919876543210',
+    status: 'raised',
+    location: {
+      lat: validLat,
+      lng: validLng
+    },
+    locationAccuracy,
+    locationTimestamp,
+    locationUnavailable: false,
+    address: address || `GPS: ${validLat.toFixed(5)}, ${validLng.toFixed(5)}`,
+    severityScore: 5,
+    createdAt: new Date().toISOString(),
+    assignedOfficerUserId: null,
+    assignedOfficerName: null,
+    etaSeconds: null,
+    droneId: null,
+    verificationNotes: 'Pending operator verification call.',
+    mediaUrl: mediaUrl || null,
+    reporterPhotoUrl: reporterPhotoUrl || null,
+    cancelledBy: null
+  };
+  state.cases.unshift(newCase);
+  console.log(`[SOS] New case ${newCase.id} created at lat=${validLat}, lng=${validLng}`);
 
   try {
     persistCases();
   } catch (error) {
-    if (previousCase) restoreCase(newCase, previousCase);
-    else state.cases = state.cases.filter(caseItem => caseItem.id !== newCase.id);
+    state.cases = state.cases.filter(caseItem => caseItem.id !== newCase.id);
     console.error(`[SOS] Unable to persist case ${newCase.id}:`, error);
     return res.status(500).json({ success: false, error: 'Unable to save the SOS case.' });
   }
@@ -1069,3 +1043,5 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`[NIRAI Backend] Running on http://0.0.0.0:${PORT}`);
   console.log(`[NIRAI WebSocket] Gateway active on ws://0.0.0.0:${PORT}`);
 });
+
+export { server };
